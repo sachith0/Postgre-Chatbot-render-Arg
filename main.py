@@ -1,6 +1,5 @@
 import os
 import time
-import logging
 import psycopg2
 import requests
 import traceback
@@ -31,30 +30,23 @@ print("🔹 Using Database: PostgreSQL")
 # Initialize FastAPI
 app = FastAPI()
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
-
 # Prometheus Metrics
 REQUEST_COUNT = Counter("api_requests_total", "Total API requests received")
 REQUEST_LATENCY = Histogram("api_request_latency_seconds", "API request latency")
 
-# Middleware: Log Requests & Track Response Time
+# Middleware: Track Response Time
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     REQUEST_COUNT.inc()
     start_time = time.time()
-    logger.info(f"📩 Received {request.method} {request.url}")
-
+    
     try:
         response = await call_next(request)
     except Exception as e:
-        logger.error(f"❌ API Error: {str(e)}", exc_info=True)
         return JSONResponse(content={"error": "Internal Server Error"}, status_code=500)
 
     process_time = time.time() - start_time
     REQUEST_LATENCY.observe(process_time)
-    logger.info(f"✅ Response: {response.status_code} | ⏱️ Time: {process_time:.4f} sec")
     return response
 
 # Database Connection Function
@@ -62,7 +54,6 @@ def get_db_connection():
     try:
         return psycopg2.connect(DATABASE_URL)
     except Exception as e:
-        logger.error(f"❌ Database connection error: {str(e)}")
         raise HTTPException(status_code=500, detail="Database connection failed")
 
 # Automate Database Setup
@@ -96,7 +87,6 @@ def setup_database():
         conn.close()
         print("✅ Database setup complete!")
     except Exception as e:
-        logger.error(f"❌ Database setup failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Database setup failed")
 
 setup_database()
@@ -122,10 +112,8 @@ def call_gemini_api(payload, retries=3):
             response = requests.post(url, headers=headers, json=payload, timeout=10)
             if response.status_code == 200:
                 return response.json()
-            else:
-                logger.warning(f"⚠️ Gemini API failure (attempt {attempt+1}): {response.text}")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Request failed (attempt {attempt+1}): {str(e)}")
+        except requests.exceptions.RequestException:
+            pass
         time.sleep(2 ** attempt)
     
     raise HTTPException(status_code=500, detail="Gemini API request failed after retries")
@@ -133,7 +121,6 @@ def call_gemini_api(payload, retries=3):
 # Global Exception Handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    logger.error(f"❌ Error on {request.method} {request.url}: {exc}")
     traceback.print_exc()
     return JSONResponse(content={"error": "Internal Server Error"}, status_code=500)
 
