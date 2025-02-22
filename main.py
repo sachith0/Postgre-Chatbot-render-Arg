@@ -4,10 +4,12 @@ import logging
 import psycopg2
 import requests
 import traceback
-from fastapi import FastAPI, Request, HTTPException, Depends
 from dotenv import load_dotenv
+from fastapi import FastAPI, Request, HTTPException
 from starlette.responses import JSONResponse, Response
 from prometheus_client import Counter, Histogram, generate_latest
+
+# Import API routers
 from auth_handler import router as auth_router
 from query_handler import router as query_router
 from speech_handler import router as speech_router
@@ -18,22 +20,19 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-
 # Validate environment variables
 if not GEMINI_API_KEY:
     raise ValueError("❌ GEMINI_API_KEY is missing in .env file")
 if not DATABASE_URL:
     raise ValueError("❌ DATABASE_URL is missing in .env file")
 
-print(f"🔹 Using Database: PostgreSQL")
+print("🔹 Using Database: PostgreSQL")
 
 # Initialize FastAPI
 app = FastAPI()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Prometheus Metrics
@@ -46,7 +45,7 @@ async def log_requests(request: Request, call_next):
     REQUEST_COUNT.inc()
     start_time = time.time()
     logger.info(f"📩 Received {request.method} {request.url}")
-    
+
     try:
         response = await call_next(request)
     except Exception as e:
@@ -96,7 +95,6 @@ def setup_database():
         cursor.close()
         conn.close()
         print("✅ Database setup complete!")
-
     except Exception as e:
         logger.error(f"❌ Database setup failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Database setup failed")
@@ -118,7 +116,7 @@ app.include_router(image_router)
 def call_gemini_api(payload, retries=3):
     headers = {"Content-Type": "application/json"}
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    
+
     for attempt in range(retries):
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=10)
@@ -129,6 +127,7 @@ def call_gemini_api(payload, retries=3):
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ Request failed (attempt {attempt+1}): {str(e)}")
         time.sleep(2 ** attempt)
+    
     raise HTTPException(status_code=500, detail="Gemini API request failed after retries")
 
 # Global Exception Handler

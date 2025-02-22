@@ -1,7 +1,6 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
 import os
 import io
-import logging
 import requests
 import psycopg2
 import pytesseract
@@ -14,18 +13,13 @@ router = APIRouter()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 DATABASE_URL = os.getenv("DATABASE_URL")
-LOG_FILE_PATH = os.getenv("LOG_FILE_PATH", "agr_logs.log")
-
-# Configure Logging
-logging.basicConfig(filename=LOG_FILE_PATH, level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # Database Connection Function
 def get_db_connection():
     """Establish a connection to PostgreSQL."""
     try:
         return psycopg2.connect(DATABASE_URL)
-    except Exception as e:
-        logging.error(f"Database connection failed: {str(e)}")
+    except Exception:
         raise HTTPException(status_code=500, detail="Database connection error.")
 
 # Extract Text from Image (OCR)
@@ -35,9 +29,8 @@ def extract_text_from_image(image_bytes: bytes) -> str:
         image = Image.open(io.BytesIO(image_bytes)).convert("L")  # Convert to grayscale
         image = ImageEnhance.Contrast(image).enhance(2.0).filter(ImageFilter.SHARPEN)
         return pytesseract.image_to_string(image, lang="hin+eng+kan+tam+ben").strip()
-    except Exception as e:
-        logging.error(f"Image processing error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Image processing error: {str(e)}")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Image processing error.")
 
 # Detect Transaction-Related Queries
 def is_transaction_query(text: str) -> bool:
@@ -69,14 +62,14 @@ def fetch_transaction_details():
             "date_time": last_transaction[3],
             "method": last_transaction[4]
         } if last_transaction else "No transactions found."
-    except Exception as e:
-        logging.error(f"Database query error: {str(e)}")
-        return f"Error querying database: {str(e)}"
+    except Exception:
+        return "Error querying database."
 
 # Main API Endpoint
 @router.post("/image-to-chatbot")
 async def image_to_chatbot(image_file: UploadFile = File(...)):
     """Processes an image, extracts text, checks for transactions, and queries the AI assistant."""
+    
     # Validate User Session
     if not user_sessions:
         raise HTTPException(status_code=403, detail="No active session. Please log in first.")
@@ -114,9 +107,8 @@ async def image_to_chatbot(image_file: UploadFile = File(...)):
         response = requests.post(GEMINI_API_URL, headers={"Content-Type": "application/json"}, json=payload)
         response.raise_for_status()
         llm_response = response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Gemini API request failed: {str(e)}")
-        llm_response = f"LLM API Error: {str(e)}"
+    except requests.exceptions.RequestException:
+        llm_response = "LLM API Error."
 
     # Return Final Response
     return {
