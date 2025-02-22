@@ -19,6 +19,11 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# Telegram Bot Config
+TELEGRAM_BOT_TOKEN = "7922001101:AAGUqcKnpPV6_0bgFJ2XB7PEBQD5NKsLPGI"
+TELEGRAM_WEBHOOK_URL = "https://postgre-chatbot-render-arg.onrender.com/webhook"
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
 # Validate environment variables
 if not GEMINI_API_KEY:
     raise ValueError("❌ GEMINI_API_KEY is missing in .env file")
@@ -114,6 +119,38 @@ def call_gemini_api(payload, retries=3):
     
     raise HTTPException(status_code=500, detail="Gemini API request failed after retries")
 
+# Telegram Webhook Setup
+def set_telegram_webhook():
+    webhook_url = f"{TELEGRAM_API_URL}/setWebhook"
+    response = requests.post(webhook_url, json={"url": TELEGRAM_WEBHOOK_URL})
+    
+    if response.status_code == 200:
+        print("✅ Telegram webhook set successfully!")
+    else:
+        print("❌ Failed to set Telegram webhook:", response.text)
+
+# Telegram Webhook Handler
+@app.post("/webhook")
+async def telegram_webhook(update: dict):
+    try:
+        print("📩 Telegram Update Received:", update)
+        if "message" in update:
+            chat_id = update["message"]["chat"]["id"]
+            text = update["message"]["text"]
+
+            # Replying to user
+            send_telegram_message(chat_id, f"🔹 You said: {text}")
+    except Exception as e:
+        print("❌ Error in webhook:", str(e))
+    return {"status": "ok"}
+
+# Function to Send Message to Telegram
+def send_telegram_message(chat_id, text):
+    url = f"{TELEGRAM_API_URL}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+    response = requests.post(url, json=payload)
+    return response.json()
+
 # Global Exception Handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
@@ -130,7 +167,12 @@ async def root():
 async def favicon():
     return Response(content="", media_type="image/x-icon")
 
+<<<<<<< HEAD
 # Start API Server
+=======
+# Start API Server & Set Webhook
+>>>>>>> f9b7ec4 (Removed logging functions and updated API structure)
 if __name__ == "__main__":
     import uvicorn
+    set_telegram_webhook()  # Ensure webhook is set on startup
     uvicorn.run(app, host="0.0.0.0", port=8000)
