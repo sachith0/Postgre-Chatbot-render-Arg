@@ -59,35 +59,31 @@ def get_db_connection():
 # Automate Database Setup
 def setup_database():
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS transactions (
+                    id SERIAL PRIMARY KEY,
+                    transaction_id TEXT UNIQUE,
+                    amount REAL,
+                    transaction_type TEXT,
+                    date_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    method TEXT
+                );
+                """)
 
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS transactions (
-            id SERIAL PRIMARY KEY,
-            transaction_id TEXT UNIQUE,
-            amount REAL,
-            transaction_type TEXT,
-            date_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            method TEXT
-        );
-        """)
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            name TEXT,
-            email TEXT UNIQUE,
-            password TEXT
-        );
-        """)
-
-        conn.commit()
-        cursor.close()
-        conn.close()
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT,
+                    email TEXT UNIQUE,
+                    password TEXT
+                );
+                """)
+            conn.commit()
         print("✅ Database setup complete!")
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Database setup failed")
+        print("❌ Database setup failed:", str(e))
 
 setup_database()
 
@@ -123,6 +119,16 @@ def call_gemini_api(payload, retries=3):
 async def global_exception_handler(request, exc):
     traceback.print_exc()
     return JSONResponse(content={"error": "Internal Server Error"}, status_code=500)
+
+# Root Route
+@app.get("/")
+async def root():
+    return {"message": "API is live!"}
+
+# Favicon Fix
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(content="", media_type="image/x-icon")
 
 # Start API Server
 if __name__ == "__main__":
