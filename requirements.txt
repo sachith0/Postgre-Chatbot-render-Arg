@@ -33,6 +33,7 @@ pydantic
 
 # UUID Support
 uuid
+python-multipart
 
 # Additional Required Libraries
 datetime
