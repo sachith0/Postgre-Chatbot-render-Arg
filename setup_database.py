@@ -1,65 +1,146 @@
-import sqlite3
+from sqlalchemy import create_engine, text
 import pandas as pd
+import os
+from dotenv import load_dotenv
+import sqlite3
 
-# Define file paths
-DB_PATH = "/Users/sachiths/Documents/Telegrambot copy/banking_data.db"
-CUSTOMERS_CSV = "/Users/sachiths/Documents/Telegrambot copy/1000_customers_data.csv"
-TRANSACTIONS_CSV = "/Users/sachiths/Documents/Telegrambot copy/100000_transactiondata.csv"
+# Load environment variables
+load_dotenv()
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Connect to SQLite
-db = sqlite3.connect(DB_PATH)
-cursor = db.cursor()
+if not DATABASE_URL:
+    raise ValueError("❌ DATABASE_URL is not set. Please check your .env file.")
 
-# Create 'users' table
-cursor.execute('''
+# Connect to PostgreSQL
+try:
+    engine = create_engine(DATABASE_URL)
+    with engine.connect() as connection:
+        print("✅ Connected to PostgreSQL database.")
+except Exception as e:
+    raise ConnectionError(f"❌ Database connection failed: {e}")
+
+# Define Table Creation Queries
+users_table_query = """
 CREATE TABLE IF NOT EXISTS users (
     customer_id TEXT PRIMARY KEY,
-    name TEXT,
-    account_number TEXT UNIQUE,
-    ifsc_code TEXT,
+    name TEXT NOT NULL,
+    account_number TEXT UNIQUE NOT NULL,
+    ifsc_code TEXT NOT NULL,
     account_city TEXT,
     account_type TEXT,
     status TEXT,
-    contact TEXT,
-    password TEXT,
-    created_at TEXT
-)
-''')
+    contact TEXT NOT NULL,
+    password TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
 
-# Create 'transactions' table
-cursor.execute('''
+transactions_table_query = """
 CREATE TABLE IF NOT EXISTS transactions (
     transaction_id TEXT PRIMARY KEY,
-    customer_id TEXT,
-    account_number TEXT,
-    date_time TEXT,
-    amount INTEGER,
-    transaction_type TEXT,
-    method TEXT,
+    customer_id TEXT REFERENCES users(customer_id) ON DELETE CASCADE,
+    account_number TEXT NOT NULL,
+    date_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    amount INTEGER CHECK (amount >= 0),
+    transaction_type TEXT CHECK (transaction_type IN ('debit', 'credit')),
+    method TEXT NOT NULL,
     description TEXT,
-    balance_after_transaction INTEGER
-)
-''')
+    balance_after_transaction INTEGER NOT NULL
+);
+"""
 
-db.commit()
+# Execute Queries
+try:
+    with engine.connect() as connection:
+        connection.execute(text(users_table_query))
+        connection.execute(text(transactions_table_query))
+        print("✅ Tables created successfully!")
+except Exception as e:
+    raise RuntimeError(f"❌ Error creating tables: {e}")
 
-# Load and insert customer data
+# Load Data from CSV
+CUSTOMERS_CSV = "1000_customers_data.csv"
+TRANSACTIONS_CSV = "100000_transactiondata.csv"
+
 try:
     customers_df = pd.read_csv(CUSTOMERS_CSV)
-    print("📌 Customers Data Sample:\n", customers_df.head())  # Debugging line
-    customers_df.to_sql("users", db, if_exists="replace", index=False)
-    print("✅ Customers data inserted successfully.")
+    if not customers_df.empty:
+        customers_df.to_sql("users", engine, if_exists="append", index=False, method="multi")
+        print(f"✅ Inserted {len(customers_df)} customers.")
+    else:
+        print("⚠️ Customers CSV is empty. No data inserted.")
 except Exception as e:
-    print("❌ Error inserting customers data:", e)
+    print(f"❌ Error inserting customers data: {e}")
 
-# Load and insert transaction data
 try:
     transactions_df = pd.read_csv(TRANSACTIONS_CSV)
-    print("📌 Transactions Data Sample:\n", transactions_df.head())  # Debugging line
-    transactions_df.to_sql("transactions", db, if_exists="replace", index=False)
-    print("✅ Transactions data inserted successfully.")
+    if not transactions_df.empty:
+        transactions_df.to_sql("transactions", engine, if_exists="append", index=False, method="multi")
+        print(f"✅ Inserted {len(transactions_df)} transactions.")
+    else:
+        print("⚠️ Transactions CSV is empty. No data inserted.")
 except Exception as e:
-    print("❌ Error inserting transactions data:", e)
+    print(f"❌ Error inserting transactions data: {e}")
 
-print("✅ Database setup completed successfully.")
-db.close()
+# SQLite Database Setup
+DB_PATH = "banking_data.db"
+
+try:
+    db = sqlite3.connect(DB_PATH)
+    cursor = db.cursor()
+
+    # Create 'users' table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS users (
+        customer_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        account_number TEXT UNIQUE NOT NULL,
+        ifsc_code TEXT NOT NULL,
+        account_city TEXT,
+        account_type TEXT,
+        status TEXT,
+        contact TEXT NOT NULL,
+        password TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+
+    # Create 'transactions' table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS transactions (
+        transaction_id TEXT PRIMARY KEY,
+        customer_id TEXT REFERENCES users(customer_id) ON DELETE CASCADE,
+        account_number TEXT NOT NULL,
+        date_time TEXT DEFAULT CURRENT_TIMESTAMP,
+        amount INTEGER CHECK (amount >= 0),
+        transaction_type TEXT CHECK (transaction_type IN ('debit', 'credit')),
+        method TEXT NOT NULL,
+        description TEXT,
+        balance_after_transaction INTEGER NOT NULL
+    )
+    ''')
+    
+    db.commit()
+    print("✅ SQLite tables created successfully.")
+
+    # Insert customer data into SQLite
+    customers_df = pd.read_csv(CUSTOMERS_CSV)
+    if not customers_df.empty:
+        customers_df.to_sql("users", db, if_exists="replace", index=False)
+        print(f"✅ Inserted {len(customers_df)} customers into SQLite.")
+    else:
+        print("⚠️ Customers CSV is empty. No data inserted into SQLite.")
+
+    # Insert transaction data into SQLite
+    transactions_df = pd.read_csv(TRANSACTIONS_CSV)
+    if not transactions_df.empty:
+        transactions_df.to_sql("transactions", db, if_exists="replace", index=False)
+        print(f"✅ Inserted {len(transactions_df)} transactions into SQLite.")
+    else:
+        print("⚠️ Transactions CSV is empty. No data inserted into SQLite.")
+    
+    db.close()
+    print("✅ SQLite database setup completed successfully.")
+
+except Exception as e:
+    print(f"❌ Error setting up SQLite database: {e}")

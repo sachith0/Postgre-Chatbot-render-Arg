@@ -1,123 +1,126 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
-import requests
 import os
-import sqlite3
+import io
+import logging
+import requests
+import psycopg2
 import pytesseract
 from PIL import Image, ImageEnhance, ImageFilter
-import io
 from auth_handler import user_sessions  # Import session storage
 
 router = APIRouter()
 
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-GEMINI_API_KEY = "AIzaSyA8btcq5oLVtm0Pdg0kuuIgCAAkoTebmIs"
+# Load Environment Variables
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+DATABASE_URL = os.getenv("DATABASE_URL")
+LOG_FILE_PATH = os.getenv("LOG_FILE_PATH", "agr_logs.log")
 
-DB_PATH = "/Users/sachiths/Documents/Telegrambot/banking_data.db"
+# Configure Logging
+logging.basicConfig(filename=LOG_FILE_PATH, level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# ✅ Extract Text from Image (OCR)
+# Database Connection Function
+def get_db_connection():
+    """Establish a connection to PostgreSQL."""
+    try:
+        return psycopg2.connect(DATABASE_URL)
+    except Exception as e:
+        logging.error(f"Database connection failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Database connection error.")
+
+# Extract Text from Image (OCR)
 def extract_text_from_image(image_bytes: bytes) -> str:
     """Extracts text from an image using OCR with preprocessing."""
     try:
-        image = Image.open(io.BytesIO(image_bytes))
-        image = image.convert("L")  # Grayscale for better OCR
-        enhancer = ImageEnhance.Contrast(image)
-        image = enhancer.enhance(2.0)
-        image = image.filter(ImageFilter.SHARPEN)
-
-        extracted_text = pytesseract.image_to_string(image, lang="hin+eng+kan+tam+ben")
-        return extracted_text.strip()
-
+        image = Image.open(io.BytesIO(image_bytes)).convert("L")  # Convert to grayscale
+        image = ImageEnhance.Contrast(image).enhance(2.0).filter(ImageFilter.SHARPEN)
+        return pytesseract.image_to_string(image, lang="hin+eng+kan+tam+ben").strip()
     except Exception as e:
+        logging.error(f"Image processing error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Image processing error: {str(e)}")
 
-# ✅ Detect Transaction-Related Queries
+# Detect Transaction-Related Queries
 def is_transaction_query(text: str) -> bool:
-    keywords = ["transaction", "amount", "balance", "statement", "credited", "debited"]
+    """Check if the extracted text contains transaction-related keywords."""
+    keywords = {"transaction", "amount", "balance", "statement", "credited", "debited"}
     return any(word in text.lower() for word in keywords)
 
-# ✅ Fetch Transactions from Database
+# Fetch Last Transaction from Database
 def fetch_transaction_details():
-    """Fetch last transaction details from database."""
+    """Fetch the latest transaction details from the PostgreSQL database."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT transaction_id, amount, transaction_type, date_time, method FROM transactions ORDER BY date_time DESC LIMIT 1;")
+        query = """
+            SELECT transaction_id, amount, transaction_type, date_time, method 
+            FROM transactions 
+            ORDER BY date_time DESC 
+            LIMIT 1;
+        """
+        cursor.execute(query)
         last_transaction = cursor.fetchone()
+        cursor.close()
         conn.close()
 
-        if last_transaction:
-            return {
-                "transaction_id": last_transaction[0],
-                "amount": last_transaction[1],
-                "transaction_type": last_transaction[2],
-                "date_time": last_transaction[3],
-                "method": last_transaction[4]
-            }
-        else:
-            return "No transactions found."
-
+        return {
+            "transaction_id": last_transaction[0],
+            "amount": last_transaction[1],
+            "transaction_type": last_transaction[2],
+            "date_time": last_transaction[3],
+            "method": last_transaction[4]
+        } if last_transaction else "No transactions found."
     except Exception as e:
+        logging.error(f"Database query error: {str(e)}")
         return f"Error querying database: {str(e)}"
 
-# ✅ Main API Endpoint
+# Main API Endpoint
 @router.post("/image-to-chatbot")
 async def image_to_chatbot(image_file: UploadFile = File(...)):
-    """Automates text extraction, database lookup, and AI response."""
-
-    # ✅ Step 1: Validate User Session
+    """Processes an image, extracts text, checks for transactions, and queries the AI assistant."""
+    # Validate User Session
     if not user_sessions:
         raise HTTPException(status_code=403, detail="No active session. Please log in first.")
-
+    
     last_logged_in_user = list(user_sessions.keys())[-1]
     user_data = user_sessions[last_logged_in_user]
 
-    # ✅ Step 2: Process Image & Extract Text
-    image_bytes = await image_file.read()
-    extracted_text = extract_text_from_image(image_bytes)
+    # Process Image & Extract Text
+    extracted_text = extract_text_from_image(await image_file.read())
+    
+    # Check for transaction-related query
+    transaction_details = fetch_transaction_details() if is_transaction_query(extracted_text) else "Not a transaction-related query."
 
-    # ✅ Step 3: Check if it's a Transaction Query
-    transaction_details = None
-    if is_transaction_query(extracted_text):
-        transaction_details = fetch_transaction_details()
-
-    # ✅ Step 4: Prepare API Request for Gemini
-    headers = {"Content-Type": "application/json"}
+    # Prepare API Request for Gemini
     payload = {
         "contents": [{
-            "parts": [
-                {"text": f"""
+            "parts": [{
+                "text": f"""
                 You are a banking assistant. Answer concisely.
 
                 **User Details:** {user_data['customer']}
-                **Last Transaction:** {transaction_details if transaction_details else "No recent transactions."}
+                **Last Transaction:** {transaction_details}
 
                 Here is a scanned bank document. Extract transaction details:
 
                 **Extracted Text:**
                 {extracted_text}
-                """}
-            ]
+                """
+            }]
         }]
     }
 
-    # ✅ Step 5: Send API Request to Gemini
+    # Send API Request to Gemini
     try:
-        response = requests.post(GEMINI_API_URL, headers=headers, json=payload)
-
-        if response.status_code == 200:
-            llm_response = response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
-        else:
-            llm_response = f"LLM API Error: {response.status_code} - {response.text}"
-
+        response = requests.post(GEMINI_API_URL, headers={"Content-Type": "application/json"}, json=payload)
+        response.raise_for_status()
+        llm_response = response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
     except requests.exceptions.RequestException as e:
-        llm_response = f"Request failed: {str(e)}"
+        logging.error(f"Gemini API request failed: {str(e)}")
+        llm_response = f"LLM API Error: {str(e)}"
 
-    # ✅ Step 6: Return Final Response
+    # Return Final Response
     return {
         "extracted_text": extracted_text,
-        "database_response": transaction_details if transaction_details else "Not a transaction-related query.",
+        "database_response": transaction_details,
         "llm_response": llm_response
     }

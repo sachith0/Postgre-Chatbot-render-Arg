@@ -1,5 +1,38 @@
+# FastAPI Framework
 fastapi
 uvicorn
-python-dotenv
+
+# HTTP Requests
 requests
+
+# Environment Variables
+python-dotenv
+
+# Database
+sqlalchemy
+psycopg2-binary  # PostgreSQL driver
+
+# Logging & Monitoring
+prometheus_client
+
+# Telegram Bot
+python-telegram-bot
+
+# Image Processing
+pillow
+pytesseract
+
+# Speech Recognition
 speechrecognition
+
+# Async Handling
+starlette
+
+# Pydantic for Data Validation
+pydantic
+
+# UUID Support
+uuid
+
+# Additional Required Libraries
+datetime
