@@ -8,7 +8,6 @@ import io
 
 TOKEN = "7922001101:AAGUqcKnpPV6_0bgFJ2XB7PEBQD5NKsLPGI"
 GEMINI_API_KEY = "AIzaSyA8btcq5oLVtm0Pdg0kuuIgCAAkoTebmIs"
-DB_PATH = "/Users/sachiths/Documents/Telegrambot/banking_data.db"
 
 # ✅ Extract Text from Image (OCR)
 def extract_text_from_image(image_bytes):

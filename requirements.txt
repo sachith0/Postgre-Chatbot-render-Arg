@@ -30,7 +30,7 @@ starlette
 
 # Pydantic for Data Validation
 pydantic
-
+python-multipart
 # UUID Support
 uuid
 python-multipart

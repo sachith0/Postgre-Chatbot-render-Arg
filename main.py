@@ -17,7 +17,7 @@ from image_handler import router as image_router
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
-LOG_FILE_PATH = os.getenv("LOG_FILE_PATH", "app.log")
+
 
 # Validate environment variables
 if not GEMINI_API_KEY:
@@ -31,9 +31,7 @@ print(f"🔹 Using Database: PostgreSQL")
 app = FastAPI()
 
 # Configure logging
-logging.basicConfig(
-    filename=LOG_FILE_PATH,
-    level=logging.INFO,
+logging.basicConfig(level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
