@@ -169,40 +169,104 @@ async def telegram_webhook(update: dict):
         chat_id = update["message"]["chat"]["id"]
         text = update["message"].get("text", "").strip()
         
+        # Get current user state from database
+        user_state = get_user_state(chat_id)
+        
         if text == "/start":
+            # Clear any existing session
+            clear_user_session(chat_id)
             TelegramHandler.send_message(chat_id, 
                 "Welcome to BankBot!\nPlease enter your account number:")
+            set_user_state(chat_id, "awaiting_account")
             return {"status": "awaiting_account"}
 
-        if text.isnumeric():
+        # Handle account number input
+        if user_state == "awaiting_account":
             user = UserManager.get_user_by_account(text)
             if user:
+                store_temp_data(chat_id, "account_number", text)
+                set_user_state(chat_id, "awaiting_password")
                 TelegramHandler.send_message(chat_id, 
                     "Account verified! Please enter your password:")
                 return {"status": "awaiting_password"}
             else:
                 TelegramHandler.send_message(chat_id, 
-                    "Invalid account number. Please try again.")
+                    "Invalid account number. Please try again or type /start to restart.")
                 return {"status": "invalid_account"}
 
-        if text.startswith("/transactions"):
-            user = UserManager.get_user_by_account(str(chat_id))
-            if user:
-                transactions = UserManager.get_user_transactions(user["customer_id"])
+        # Handle password verification
+        if user_state == "awaiting_password":
+            account_number = get_temp_data(chat_id, "account_number")
+            if not account_number:
+                TelegramHandler.send_message(chat_id, 
+                    "Session expired. Please type /start to begin again.")
+                return {"status": "session_expired"}
+
+            user = UserManager.get_user_by_account(account_number)
+            if user and verify_password(text, user["password"]):
+                set_user_state(chat_id, "authenticated")
+                store_user_session(chat_id, user)
+                
+                welcome_msg = (
+                    f"Authentication successful!\n\n"
+                    f"Welcome {user['name']}\n"
+                    f"Account: {user['account_number']}\n"
+                    f"Type: {user['account_type']}\n\n"
+                    "Available commands:\n"
+                    "/transactions - View recent transactions\n"
+                    "/query - Ask any banking related questions"
+                )
+                TelegramHandler.send_message(chat_id, welcome_msg)
+                return {"status": "authenticated"}
+            else:
+                TelegramHandler.send_message(chat_id, 
+                    "Invalid password. Please type /start to try again.")
+                clear_user_session(chat_id)
+                return {"status": "invalid_password"}
+
+        # Handle authenticated user commands
+        if user_state == "authenticated":
+            user_data = get_user_session(chat_id)
+            if not user_data:
+                TelegramHandler.send_message(chat_id, 
+                    "Session expired. Please type /start to authenticate.")
+                return {"status": "session_expired"}
+
+            if text.startswith("/transactions"):
+                transactions = UserManager.get_user_transactions(user_data["customer_id"])
                 message = TelegramHandler.format_transaction_message(transactions)
                 TelegramHandler.send_message(chat_id, message)
                 return {"status": "transactions_fetched"}
 
-        if text.startswith("/query"):
-            query = text.replace("/query", "").strip()
-            if query:
-                response = call_gemini_api({"text": query})
-                TelegramHandler.send_message(chat_id, response)
-                return {"status": "query_processed"}
+            if text.startswith("/query"):
+                query = text.replace("/query", "").strip()
+                if query:
+                    # Get user context for the query
+                    context = {
+                        "user_info": {
+                            "name": user_data["name"],
+                            "account_number": user_data["account_number"],
+                            "account_type": user_data["account_type"],
+                            "city": user_data["account_city"]
+                        },
+                        "transactions": UserManager.get_user_transactions(user_data["customer_id"])
+                    }
+                    
+                    response = call_gemini_api({
+                        "query": query,
+                        "context": context
+                    })
+                    TelegramHandler.send_message(chat_id, response)
+                    return {"status": "query_processed"}
+                else:
+                    TelegramHandler.send_message(chat_id, 
+                        "Please provide your query after /query command")
+                    return {"status": "empty_query"}
 
+        # Handle unauthorized access
         TelegramHandler.send_message(chat_id, 
-            "I didn't understand that command. Please try again.")
-        return {"status": "unknown_command"}
+            "Please authenticate first using /start command")
+        return {"status": "unauthorized"}
 
     except Exception as e:
         print(f"Error in webhook: {str(e)}")
@@ -210,6 +274,87 @@ async def telegram_webhook(update: dict):
         TelegramHandler.send_message(chat_id, 
             "An error occurred. Please try again.")
         return {"status": "error"}
+
+# Session management functions
+def get_user_state(chat_id: int) -> str:
+    with DatabaseManager.get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT state FROM user_sessions 
+                WHERE chat_id = %s AND expires_at > NOW()
+            """, (chat_id,))
+            result = cursor.fetchone()
+            return result[0] if result else None
+
+def set_user_state(chat_id: int, state: str):
+    with DatabaseManager.get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO user_sessions (chat_id, state, expires_at)
+                VALUES (%s, %s, NOW() + INTERVAL '1 hour')
+                ON CONFLICT (chat_id) 
+                DO UPDATE SET state = EXCLUDED.state, 
+                             expires_at = NOW() + INTERVAL '1 hour'
+            """, (chat_id, state))
+        conn.commit()
+
+def store_temp_data(chat_id: int, key: str, value: str):
+    with DatabaseManager.get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO temp_data (chat_id, key, value, expires_at)
+                VALUES (%s, %s, %s, NOW() + INTERVAL '5 minutes')
+                ON CONFLICT (chat_id, key) 
+                DO UPDATE SET value = EXCLUDED.value, 
+                             expires_at = NOW() + INTERVAL '5 minutes'
+            """, (chat_id, key, value))
+        conn.commit()
+
+def get_temp_data(chat_id: int, key: str) -> str:
+    with DatabaseManager.get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT value FROM temp_data 
+                WHERE chat_id = %s AND key = %s AND expires_at > NOW()
+            """, (chat_id, key))
+            result = cursor.fetchone()
+            return result[0] if result else None
+
+def store_user_session(chat_id: int, user_data: dict):
+    with DatabaseManager.get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO user_sessions (chat_id, user_data, expires_at)
+                VALUES (%s, %s, NOW() + INTERVAL '1 day')
+                ON CONFLICT (chat_id) 
+                DO UPDATE SET user_data = EXCLUDED.user_data, 
+                             expires_at = NOW() + INTERVAL '1 day'
+            """, (chat_id, json.dumps(user_data)))
+        conn.commit()
+
+def get_user_session(chat_id: int) -> dict:
+    with DatabaseManager.get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT user_data FROM user_sessions 
+                WHERE chat_id = %s AND expires_at > NOW()
+            """, (chat_id, ))
+            result = cursor.fetchone()
+            return json.loads(result[0]) if result else None
+
+def clear_user_session(chat_id: int):
+    with DatabaseManager.get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                DELETE FROM user_sessions WHERE chat_id = %s
+            """, (chat_id,))
+            cursor.execute("""
+                DELETE FROM temp_data WHERE chat_id = %s
+            """, (chat_id,))
+        conn.commit()
+
+def verify_password(input_password: str, stored_password: str) -> bool:
+    return input_password == stored_password  # Replace with proper password hashing
 
 def call_gemini_api(payload, retries=3):
     headers = {"Content-Type": "application/json"}
